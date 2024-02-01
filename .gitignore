@@ -1,0 +1,23 @@
+# Files too big
+*.tar
+*.zst
+datasets/*
+
+# Checkpoints
+checkpoints/*
+
+# logs
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IPython
+profile_default/
+ipython_config.py
+
+# pyenv
+.python-version
+.vscode

@@ -1,0 +1,17 @@
+torch>=2.0.0
+sentencepiece # tokenizer
+tqdm
+numpy
+
+tensorboard
+torch_tb_profiler==0.4.1
+
+# 4-bit quantization
+bitsandbytes==0.41.3
+scipy
+
+# preparing and building datasets
+pyarrow
+pandas
+bs4
+chardet
