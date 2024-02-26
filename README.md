@@ -36,7 +36,7 @@ Our work mainly differs in these aspects:
   - `run_dpo_lora.py` train policy model with DPO, starting from supervised fine-tuning model, supports 4-bit QLoRA parameter efficient fine-tuning method (only supports single GPU).
 - `scripts` directory contains all source code for convert the model weights and build datasets.
   - `build_finetune_datasets.py` build fine-tuning datasets (save the dataset to .pkl files), which is used for supervised fine-tuning training stage.
-  - `build_preference_datasets.py` build preference comparison datasets (save the dataset to .pkl files), which is used for DPO training stage.
+  - `build_dpo_preference_datasets.py` build preference comparison datasets (save the dataset to .pkl files), which is used for DPO training stage.
   - `convert_meta_checkpoint.py` convert Meta's pre-trained LLaMA-2 weights to support our model in plain PyTorch code, so we can load it to start fine-tuning.
   - `convert_lora_checkpoint.py` convert fine-tunned LoRA weights to a full state_dict checkpoint.
 - `logs` directory contains training logs for the different runs.
@@ -68,54 +68,20 @@ python scripts/convert_meta_checkpoint.py
 python scripts/build_finetune_datasets.py
 ```
 
-Note, we pre-compute the log probabilities from the reference model when building the preference dataset. This can save compute resource and it also makes training with DPO possible on a single GPU, since we only need to run the main LLM model.
+And for the preference dataset, we pre-compute the log probabilities from the reference model when building the preference dataset. This can save compute resource and it also makes training with DPO possible on a single GPU, since we only need to run the main LLM model.
 
-To save compute resource, we limit number of samples in the `build_finetune_datasets.py`, you may want to revert that before you run it. Just for reference, it took ~6 hours to pre-compute these log probabilities for the 100,000 samples (maximum length of 512) on a single RTX 3090 GPU.
+```
+python scripts/build_dpo_preference_datasets.py
+```
+
+To save compute resource, we limit number of samples in the `build_dpo_preference_datasets.py`, you may want to revert that before you run it. Just for reference, it took ~3 hours to pre-compute these log probabilities for the 50,000 samples (maximum length of 512) on a single RTX 3090 GPU.
 
 ## Training Stages
 
 1. Run the `run_sft_lora.py` script to use supervised fine-tuning and QLoRA to train the model, this requires a pre-trained model and fine-tune datasets. Check and maintain the configuration inside `dpo_llama/configs/sft_lora.py` if necessary.
 2. Run the `run_dpo_lora.py` script to use DPO and QLoRA to train the model, this requires a fine-tuned model and the preference datasets. Check and maintain the configuration inside `dpo_llama/configs/dpo_lora.py` if necessary.
 
-## 4-bit QLoRA
-
-### LoRA parameters
-
-We use a slightly modified LoRALayer class, where we set the scaling directly instead of using an alpha parameter, we found this more consistent and easy to maintain. Since in most case, using a scaling of 1 makes more sense.
-
-```
-lora_r: int = 64
-lora_scaling: float = 1.0  # set the LoRA scaling, by default 1.0 no scaling
-lora_dropout: float = 0.0
-```
-
-### LoRA Trainable layers
-
-We can specify which layers in the model should be trainable with LoRA using options like the ones below.
-
-```
-lora_attn_query: bool = True  # train Attention query layer
-lora_attn_key: bool = False  # train Attention key layer
-lora_attn_value: bool = True  # train Attention value layer
-lora_attn_proj: bool = False  # train Attention projection layer
-lora_attn_mlp: bool = False  # train Attention MLP block
-lora_lm_head: bool = False  # train model output head
-```
-
-### 4-bit Quantization
-
-We can apply quantization to the frozen linear layers, or both the frozen linear layers and trainable LoRA layers.
-
-When quantizing a LoRA layer, only the pre-trained weights are quantized, while the LoRA parameters remain unchanged.
-
-It's important to mention that quantization is limited to 4-bit quantization, and we utilize `Bitsandbytes` to do so.
-
-```
-quant_4bit: bool = False  # quantize frozen linear layer
-quant_lora_4bit: bool = False  # quantize LoRA linear layer
-quant_4bit_double: bool = False  # double quantize
-quant_4bit_type: str = 'nf4'  # only supports 'fp4' or 'nf4'
-```
+One thing to point out, it's best to use the samples from the same distribution to do supervised fine-tuning and DPO training.
 
 # Stage 1 - Supervised Fine-Tuning (SFT)
 

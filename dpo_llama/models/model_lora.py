@@ -34,7 +34,6 @@ class LoraModelArgs(llama.ModelArgs):
     lora_attn_value: bool = False  # train Attention value layer
     lora_attn_proj: bool = False  # train Attention output projection layer
     lora_attn_mlp: bool = False  # train Attention MLP block
-    lora_lm_head: bool = False  # train model output head
 
     quant_4bit: bool = False  # quantize frozen linear layer
     quant_lora_4bit: bool = False  # quantize LoRA linear layer
@@ -198,7 +197,6 @@ class Transformer(llama.Transformer):
 
         self.post_norm = llama.RMSNorm(params.dim, eps=params.norm_eps)
 
-        head_layer_cls = get_linear_layer(params, params.lora_lm_head)
-        self.lm_head = head_layer_cls(params.dim, params.vocab_size, bias=False)
+        self.lm_head = nn.Linear(params.dim, params.vocab_size, bias=False)
 
         self.freqs_cis = llama.precompute_freqs_cis(self.params.dim // self.params.n_heads, self.params.max_seq_len * 2)

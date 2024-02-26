@@ -37,8 +37,6 @@ from dpo_llama.utils.train_helper import (
     create_optimizer,
     compute_num_trainable_params,
     get_grad_norm_local,
-    masked_mean,
-    masked_sum,
 )
 from dpo_llama.utils.logger import create_logger, log_statistics
 from dpo_llama.utils.tracker import DPOStatsTracker
@@ -111,35 +109,36 @@ def extract_chosen_and_reject_logprobs(
     assert len(loss_mask.shape) == 2
 
     pi_logprobs = torch.log_softmax(pi_logits, dim=2)  # [batch_size, seq_len, vocab_size]
-    pi_logprobs = torch.gather(pi_logprobs, dim=2, index=token_target.detach().unsqueeze(2)).squeeze(2)  # [batch_size, seq_len]
+    pi_logprobs = torch.gather(pi_logprobs, dim=2, index=token_target.unsqueeze(2)).squeeze(2)  # [batch_size, seq_len]
 
-    masked_pi_logprobs = (pi_logprobs * loss_mask).sum(1)  # [batch_size]
-    masked_ref_logprobs = (ref_logprobs * loss_mask).sum(1)  # [batch_size]
+    pi_logprobs = (pi_logprobs * loss_mask.detach()).sum(1)  # [batch_size]
+    ref_logprobs = (ref_logprobs * loss_mask.detach()).sum(1)  # [batch_size]
 
     half_size = token_target.shape[0] // 2
 
-    pi_logprobs_chosen = masked_pi_logprobs[:half_size]
-    ref_logprobs_chosen = masked_ref_logprobs[:half_size]
+    pi_chosen_logprobs = pi_logprobs[:half_size]
+    ref_chosen_logprobs = ref_logprobs[:half_size]
 
-    pi_logprobs_rejected = masked_pi_logprobs[half_size:]
-    ref_logprobs_rejected = masked_ref_logprobs[half_size:]
+    pi_rejected_logprobs = pi_logprobs[half_size:]
+    ref_rejected_logprobs = ref_logprobs[half_size:]
 
-    return pi_logprobs_chosen, pi_logprobs_rejected, ref_logprobs_chosen.detach(), ref_logprobs_rejected.detach()
+    return pi_chosen_logprobs, pi_rejected_logprobs, ref_chosen_logprobs, ref_rejected_logprobs
 
 
 def train_step(
     model: Transformer,
-    batch: Tuple[torch.Tensor],
+    batch: Dict[Text, torch.Tensor],
     scaler: torch.cuda.amp.GradScaler,
+    gradient_accum_steps: int,
+    tracker: DPOStatsTracker,
     dpo_beta: float,
     dpo_label_smoothing: float,
+    dpo_reference_free: bool,
     use_ipo_loss: bool,
-    loss_scale: float,
-    tracker: DPOStatsTracker,
 ) -> None:
     """Run a single training step, where we do a forward + backward passes, but do no update parameters"""
 
-    assert loss_scale > 0
+    assert gradient_accum_steps >= 1
 
     token_input = batch['token_input'].to('cuda', non_blocking=True)
     token_target = batch['token_target'].to('cuda', non_blocking=True)
@@ -147,21 +146,22 @@ def train_step(
     ref_logprobs = batch['ref_logprobs'].to('cuda', non_blocking=True)
     pi_logits = model(token_input)
 
-    pi_logprobs_chosen, pi_logprobs_rejected, ref_logprobs_chosen, ref_logprobs_rejected = extract_chosen_and_reject_logprobs(pi_logits, ref_logprobs, token_target, loss_mask)
+    pi_chosen_logprobs, pi_rejected_logprobs, ref_chosen_logprobs, ref_rejected_logprobs = extract_chosen_and_reject_logprobs(pi_logits, ref_logprobs, token_target, loss_mask)
 
     (losses, chosen_rewards, rejected_rewards) = compute_preference_loss(
-        pi_logprobs_chosen,
-        pi_logprobs_rejected,
-        ref_logprobs_chosen,
-        ref_logprobs_rejected,
+        pi_chosen_logprobs,
+        pi_rejected_logprobs,
+        ref_chosen_logprobs,
+        ref_rejected_logprobs,
         beta=dpo_beta,
         label_smoothing=dpo_label_smoothing,
         ipo=use_ipo_loss,
+        reference_free=dpo_reference_free,
     )
 
     loss = losses.mean()
     # scale the loss to account for gradient accumulation
-    scaled_loss = loss * loss_scale
+    scaled_loss = loss / gradient_accum_steps
 
     if scaler is not None:  # when using float16
         scaler.scale(scaled_loss).backward()
@@ -205,10 +205,11 @@ def run_validation_steps(
     model: Transformer,
     loader: DataLoader,
     steps: int,
+    tracker: DPOStatsTracker,
     dpo_beta: float,
     dpo_label_smoothing: float,
+    dpo_reference_free: bool,
     use_ipo_loss: bool,
-    tracker: DPOStatsTracker,
 ) -> None:
     """Run M validation steps"""
 
@@ -220,16 +221,17 @@ def run_validation_steps(
         ref_logprobs = batch['ref_logprobs'].to('cuda', non_blocking=True)
         pi_logits = model(token_input)
 
-        pi_logprobs_chosen, pi_logprobs_rejected, ref_logprobs_chosen, ref_logprobs_rejected = extract_chosen_and_reject_logprobs(pi_logits, ref_logprobs, token_target, loss_mask)
+        pi_chosen_logprobs, pi_rejected_logprobs, ref_chosen_logprobs, ref_rejected_logprobs = extract_chosen_and_reject_logprobs(pi_logits, ref_logprobs, token_target, loss_mask)
 
         (losses, chosen_rewards, rejected_rewards) = compute_preference_loss(
-            pi_logprobs_chosen,
-            pi_logprobs_rejected,
-            ref_logprobs_chosen,
-            ref_logprobs_rejected,
+            pi_chosen_logprobs,
+            pi_rejected_logprobs,
+            ref_chosen_logprobs,
+            ref_rejected_logprobs,
             beta=dpo_beta,
             label_smoothing=dpo_label_smoothing,
             ipo=use_ipo_loss,
+            reference_free=dpo_reference_free,
         )
 
         tracker.update(losses.detach(), chosen_rewards, rejected_rewards)
@@ -260,34 +262,33 @@ def custom_collate_fn(batch, pad_id: int, max_seq_len: int, full_pad: bool = Fal
     half_size = len(batch)
 
     batch_input = torch.full((batch_size, max_batch_seqlen), pad_id, dtype=torch.long)
-    batch_ref_logprobs = torch.full((batch_size, max_batch_seqlen), pad_id, dtype=torch.float)
+    batch_ref_logprobs = torch.full((batch_size, max_batch_seqlen), 0.0, dtype=torch.float)
 
     # loss mask where 0s at the beginning are prompt tokens, 1s are completion tokens, and 0s at the ending are padding tokens
     batch_loss_mask = torch.full((batch_size, max_batch_seqlen), 0, dtype=torch.long)
 
     for i, item in enumerate(batch):
-        seq_chosen = item['chosen_tokens'].type(torch.long)
-        seq_rejected = item['rejected_tokens'].type(torch.long)
-
+        chosen_tokens = item['chosen_tokens'].type(torch.long)
+        rejected_tokens = item['rejected_tokens'].type(torch.long)
         chosen_ref_logprobs = item['chosen_ref_logprobs'].type(torch.float)
         rejected_ref_logprobs = item['rejected_ref_logprobs'].type(torch.float)
 
         len_prompt = item['len_prompt']
-        len_chosen = len(seq_chosen)
-        len_rejected = len(seq_rejected)
+        len_chosen = len(chosen_tokens)
+        len_rejected = len(rejected_tokens)
 
         assert len(chosen_ref_logprobs) == len_chosen
         assert len(rejected_ref_logprobs) == len_rejected
 
         # Chosen sequences
-        batch_input[i, :len_chosen] = seq_chosen
+        batch_input[i, :len_chosen] = chosen_tokens
         batch_ref_logprobs[i, :len_chosen] = chosen_ref_logprobs
-        batch_loss_mask[i, len_prompt - 1 : len_chosen - 1] = 1  # -1 because our target is shifted one step to left
+        batch_loss_mask[i, len_prompt : len_chosen - 1] = 1  # -1 because our target is shifted one step to the left
 
         # Rejected sequences
-        batch_input[i + half_size, :len_rejected] = seq_rejected
+        batch_input[i + half_size, :len_rejected] = rejected_tokens
         batch_ref_logprobs[i + half_size, :len_rejected] = rejected_ref_logprobs
-        batch_loss_mask[i + half_size, len_prompt - 1 : len_rejected - 1] = 1
+        batch_loss_mask[i + half_size, len_prompt : len_rejected - 1] = 1
 
     # shift one step to get target for computing log probabilities
     batch_target = torch.full((batch_size, max_batch_seqlen), pad_id, dtype=torch.long)
@@ -305,7 +306,6 @@ def main():
     assert cfg.num_epochs >= 1
     assert cfg.train_batch_size >= 1
     assert cfg.gradient_accum_steps >= 1
-    assert 0 < cfg.loss_scale <= 1
     assert cfg.log_interval >= 1
     assert cfg.val_interval >= 0
     assert cfg.val_steps >= 1
@@ -388,7 +388,6 @@ def main():
         lora_attn_value=cfg.lora_attn_value,
         lora_attn_proj=cfg.lora_attn_proj,
         lora_attn_mlp=cfg.lora_attn_mlp,
-        lora_lm_head=cfg.lora_lm_head,
         # Quantization configurations
         quant_4bit=cfg.quant_4bit,
         quant_lora_4bit=cfg.quant_lora_4bit,
@@ -419,12 +418,14 @@ def main():
         else:
             module = module.to(dtype=compute_dtype)
 
-    mark_only_lora_as_trainable(model, train_bias=cfg.train_bias)
+    mark_only_lora_as_trainable(model, train_bias=cfg.train_bias, additional_layers=cfg.additional_layers)
 
     # This is where the weights quantization happens
     # when we move the model to cuda, the bnb.nn.Params4bit.cuda() method is called,
     # and the weights is quantized using bnb.functional.quantize_4bit
     model = model.to('cuda')
+
+    torch.cuda.empty_cache()
 
     logger.info('Initializing optimizer ...')
     num_trainable, num_frozen = compute_num_trainable_params(model)
@@ -452,7 +453,7 @@ def main():
 
     # --------------- Start Training ---------------
 
-    create_ckpt_func = functools.partial(create_lora_checkpoint, train_bias=cfg.train_bias)
+    create_ckpt_func = functools.partial(create_lora_checkpoint, train_bias=cfg.train_bias, additional_layers=cfg.additional_layers)
 
     torch_profiler = None
     tb_writer = SummaryWriter(os.path.join(cfg.log_dir, cfg.model_type))
@@ -479,7 +480,17 @@ def main():
         val_tracker.reset()
 
         for i, batch in enumerate(train_loader):  # for each batch in current epoch
-            train_step(model, batch, scaler, cfg.dpo_beta, cfg.dpo_label_smoothing, cfg.use_ipo_loss, cfg.loss_scale, train_tracker)
+            train_step(
+                model=model,
+                batch=batch,
+                scaler=scaler,
+                gradient_accum_steps=cfg.gradient_accum_steps,
+                tracker=train_tracker,
+                dpo_beta=cfg.dpo_beta,
+                dpo_label_smoothing=cfg.dpo_label_smoothing,
+                dpo_reference_free=cfg.dpo_reference_free,
+                use_ipo_loss=cfg.use_ipo_loss,
+            )
 
             if i % cfg.gradient_accum_steps == 0:
                 grad_norm = update_step(model, optimizer, scheduler, cfg.grad_clip, scaler)
@@ -504,7 +515,16 @@ def main():
                 # validation steps
                 if cfg.val_steps > 0 and (cfg.val_interval > 0 and train_steps % cfg.val_interval == 0 or train_steps == max_train_steps):
                     model.eval()
-                    run_validation_steps(model, val_loader, cfg.val_steps, cfg.dpo_beta, cfg.dpo_label_smoothing, cfg.use_ipo_loss, val_tracker)
+                    run_validation_steps(
+                        model=model,
+                        loader=val_loader,
+                        steps=cfg.val_steps,
+                        tracker=val_tracker,
+                        dpo_beta=cfg.dpo_beta,
+                        dpo_label_smoothing=cfg.dpo_label_smoothing,
+                        dpo_reference_free=cfg.dpo_reference_free,
+                        use_ipo_loss=cfg.use_ipo_loss,
+                    )
                     model.train()
 
                     val_stats = val_tracker.get_dict(reset=True)

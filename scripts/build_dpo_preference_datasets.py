@@ -8,7 +8,6 @@ from typing import Tuple, List, Mapping, Text, Any, Dict
 import functools
 import tqdm
 import multiprocessing as mp
-from concurrent.futures import ProcessPoolExecutor, as_completed
 import math
 import os
 import shutil
@@ -203,19 +202,17 @@ def _process_single_stackexchange_file(
                 {'role': 'assistant', 'content': rejected_answer.strip()},
             ]
 
-            prompt_tokens, chosen_tokens = build_prompt_completion(chosen_dialog, tokenizer)
-            prompt_tokens, rejected_tokens = build_prompt_completion(rejected_dialog, tokenizer)
+            prompt_tokens_1, chosen_tokens = build_prompt_completion(chosen_dialog, tokenizer)
+            prompt_tokens_2, rejected_tokens = build_prompt_completion(rejected_dialog, tokenizer)
 
-            if len(prompt_tokens) + len(chosen_tokens) > max_seq_len or len(prompt_tokens) + len(rejected_tokens) > max_seq_len:
+            # some sample may be corrupted, where the prompt is not the same
+            if prompt_tokens_1 != prompt_tokens_2 or len(prompt_tokens_1) + len(chosen_tokens) > max_seq_len or len(prompt_tokens_2) + len(rejected_tokens) > max_seq_len:
                 continue
 
             item = {}
-            item['chosen_tokens'] = prompt_tokens + chosen_tokens  # chosen prompt + completion tokens
-            item['rejected_tokens'] = prompt_tokens + rejected_tokens  # rejected prompt + completion tokens
-
-            item['len_prompt'] = len(prompt_tokens)
-            item['len_chosen_completion'] = len(chosen_tokens)
-            item['len_rejected_completion'] = len(rejected_tokens)
+            item['chosen_tokens'] = prompt_tokens_1 + chosen_tokens  # chosen prompt + completion tokens
+            item['rejected_tokens'] = prompt_tokens_2 + rejected_tokens  # rejected prompt + completion tokens
+            item['len_prompt'] = len(prompt_tokens_1)
 
             samples.append(item)
 
@@ -259,25 +256,19 @@ def _process_single_hh_rlhf_jsonl_file(
             continue
 
         chosen_dialog = DEFAULT_DIALOG + chosen_dialog
-        prompt_tokens, chosen_tokens = build_prompt_completion(chosen_dialog, tokenizer)
-
-        if len(prompt_tokens) + len(chosen_tokens) > max_seq_len:
-            continue
+        prompt_tokens_1, chosen_tokens = build_prompt_completion(chosen_dialog, tokenizer)
 
         rejected_dialog = DEFAULT_DIALOG + rejected_dialog
-        _, rejected_tokens = build_prompt_completion(rejected_dialog, tokenizer)
+        prompt_tokens_2, rejected_tokens = build_prompt_completion(rejected_dialog, tokenizer)
 
-        if len(prompt_tokens) + len(rejected_tokens) > max_seq_len:
+        # some sample may be corrupted, where the prompt is not the same
+        if prompt_tokens_1 != prompt_tokens_2 or len(prompt_tokens_1) + len(chosen_tokens) > max_seq_len or len(prompt_tokens_2) + len(rejected_tokens) > max_seq_len:
             continue
 
         item = {}
-        item['chosen_tokens'] = prompt_tokens + chosen_tokens  # chosen prompt + completion tokens
-        item['len_prompt'] = len(prompt_tokens)
-        item['len_chosen_completion'] = len(chosen_tokens)
-
-        item['rejected_tokens'] = prompt_tokens + rejected_tokens  # rejected prompt + completion tokens
-        item['len_rejected_completion'] = len(rejected_tokens)
-
+        item['chosen_tokens'] = prompt_tokens_1 + chosen_tokens  # chosen prompt + completion tokens
+        item['rejected_tokens'] = prompt_tokens_2 + rejected_tokens  # rejected prompt + completion tokens
+        item['len_prompt'] = len(prompt_tokens_1)
         samples.append(item)
 
     return samples
@@ -310,15 +301,15 @@ def compute_reference_logprobs(datasets: List[Dict], reference_model: Transforme
         batch_chosen_input = torch.full((current_batch_size, max_seqlen_chosen), tokenizer.eos_id, dtype=torch.long, device=device)
         batch_rejected_input = torch.full((current_batch_size, max_seqlen_rejected), tokenizer.eos_id, dtype=torch.long, device=device)
 
-        for i, item in enumerate(current_batch):
+        for j, item in enumerate(current_batch):
             chosen_tokens, rejected_tokens = (item['chosen_tokens'], item['rejected_tokens'])
 
             chosen_seq = torch.tensor(chosen_tokens).type(torch.long)
             rejected_seq = torch.tensor(rejected_tokens).type(torch.long)
 
             # right padding, a simplified example where 0s are pad id: [1, 2, 3] -> [1, 2, 3, 0, 0]
-            batch_chosen_input[i, : len(chosen_seq)] = chosen_seq
-            batch_rejected_input[i, : len(rejected_seq)] = rejected_seq
+            batch_chosen_input[j, : len(chosen_seq)] = chosen_seq
+            batch_rejected_input[j, : len(rejected_seq)] = rejected_seq
 
         # shift one step to get targets for computing log probabilities
         batch_chosen_target = torch.full((current_batch_size, max_seqlen_chosen), tokenizer.eos_id, dtype=torch.long, device=device)
@@ -335,14 +326,11 @@ def compute_reference_logprobs(datasets: List[Dict], reference_model: Transforme
         batch_rejected_logprobs = torch.gather(batch_rejected_logprobs, dim=2, index=batch_rejected_target.unsqueeze(2)).squeeze(2).cpu()  # [batch_size, seq_len]
 
         # save logprobs from reference model
-        for j, (logprobs_chosen, logprobs_rejected) in enumerate(zip(batch_chosen_logprobs.tolist(), batch_rejected_logprobs.tolist())):
-            idx = start_idx + j
+        for k, (logprobs_chosen, logprobs_rejected) in enumerate(zip(batch_chosen_logprobs.tolist(), batch_rejected_logprobs.tolist())):
+            idx = start_idx + k
             item = datasets[idx]
-            seqlen_chosen = item['len_prompt'] + item['len_chosen_completion']
-            datasets[idx]['chosen_ref_logprobs'] = logprobs_chosen[:seqlen_chosen]  # [seq_len]
-
-            seqlen_rejected = item['len_prompt'] + item['len_rejected_completion']
-            datasets[idx]['rejected_ref_logprobs'] = logprobs_rejected[:seqlen_rejected]  # [seq_len]
+            datasets[idx]['chosen_ref_logprobs'] = logprobs_chosen[: len(item['chosen_tokens'])]  # [seq_len]
+            datasets[idx]['rejected_ref_logprobs'] = logprobs_rejected[: len(item['rejected_tokens'])]  # [seq_len]
 
         pbar.update(1)
 
@@ -431,8 +419,6 @@ def process_hh_rlhf_dataset(
         'chosen_ref_logprobs': 'the log probabilities for the chosen tokenized prompt text + chosen completion text, computed with the reference model',
         'rejected_ref_logprobs': 'the log probabilities for the chosen tokenized prompt text + rejected completion text, computed with the reference model',
         'len_prompt': 'length of tokenized prompt text',
-        'len_chosen_completion': 'length of tokenized chosen completion text',
-        'len_rejected_completion': 'length of tokenized rejected completion text',
     }
     metadata['min_responses'] = 2
     metadata['max_responses'] = 2
@@ -530,8 +516,6 @@ def process_stackexchange_dataset(
         'chosen_ref_logprobs': 'the log probabilities for the chosen tokenized prompt text + chosen completion text, computed with the reference model',
         'rejected_ref_logprobs': 'the log probabilities for the chosen tokenized prompt text + rejected completion text, computed with the reference model',
         'len_prompt': 'length of tokenized prompt text',
-        'len_chosen_completion': 'length of tokenized chosen completion text',
-        'len_rejected_completion': 'length of tokenized rejected completion text',
     }
     metadata['min_responses'] = 2
     metadata['max_responses'] = max_responses
@@ -582,10 +566,7 @@ def load_reference_model(ckpt_path: str, vocab_size: int = 32000, max_seq_len: i
     for params in model.parameters():
         params.requires_grad = False
 
-    for name, module in model.named_modules():
-        module = module.to(dtype=compute_dtype)
-
-    model = model.eval()
+    model = model.to(dtype=compute_dtype).eval()
     return model
 
 
@@ -604,7 +585,7 @@ if __name__ == '__main__':
     tokenizer = Tokenizer(model_path='/home/michael/models/meta_llama2/tokenizer.model')
 
     reference_model = load_reference_model(
-        ckpt_path='./checkpoints/7b-sft/steps-2200-merged.pth',
+        ckpt_path='./checkpoints/7b-sft/steps-5500-merged.pth',
         vocab_size=tokenizer.vocab_size,
     )
 
@@ -616,16 +597,16 @@ if __name__ == '__main__':
         num_workers=16,
         batch_size=32,
         max_seq_length=512,
-        max_samples=100000,
+        max_samples=50000,
     )
 
-    process_stackexchange_dataset(
-        src_dir='/home/michael/datasets/stack_exchange_preferences',
-        output_dir='./datasets/stack_exchange_preferences',
-        tokenizer=tokenizer,
-        reference_model=reference_model,
-        num_workers=16,
-        batch_size=32,
-        max_seq_length=512,
-        max_samples=100000,
-    )
+    # process_stackexchange_dataset(
+    #     src_dir='/home/michael/datasets/stack_exchange_preferences',
+    #     output_dir='./datasets/stack_exchange_preferences',
+    #     tokenizer=tokenizer,
+    #     reference_model=reference_model,
+    #     num_workers=16,
+    #     batch_size=32,
+    #     max_seq_length=512,
+    #     max_samples=50000,
+    # )

@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 # llama 2 models
 llama_configs = {
-    '3B': dict(n_layers=16, n_heads=16, dim=4096),  # for code testing only
+    '1B': dict(n_layers=12, n_heads=12, dim=1024),  # for code testing only
     '7B': dict(n_layers=32, n_heads=32, dim=4096),
     '13B': dict(n_layers=40, n_heads=40, dim=5120),
     '70B': dict(n_layers=80, n_heads=64, dim=8192),

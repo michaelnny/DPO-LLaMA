@@ -3,7 +3,7 @@
 # See the accompanying LICENSE file for details.
 
 
-from typing import Tuple
+from typing import Tuple, Optional
 from dataclasses import dataclass
 
 
@@ -13,25 +13,29 @@ class config:
 
     # model type definition, the details (number of layers, heads etc.) are defined in model.py
     model_type: str = '7B'  # 7B, 13B, 70B
-    max_seq_len: int = 450
+    max_seq_len: int = 512
 
     pretrain_ckpt_file: str = '/home/michael/models/meta_llama2/llama-2-7b/consolidated.pth'  # load pretrained checkpoint
     tokenizer_file: str = '/home/michael/models/meta_llama2/tokenizer.model'  # load tokenizer model
 
     # datasets
     train_datasources: Tuple[str] = (
-        './datasets/dolly/train.pkl',
         './datasets/alpaca/train.pkl',
-        './datasets/squad/train.pkl',
-        './datasets/deepmind_mathematics/train.pkl',
-        './datasets/commonsense_dialogues/train.pkl',
+        './datasets/hh_rlhf_finetune/train.pkl',  # 160k
+        # './datasets/stack_exchange_finetune/train.pkl',  # 300k
+        # './datasets/dolly/train.pkl',
+        # './datasets/squad/train.pkl',
+        # './datasets/commonsense_dialogues/train.pkl',
+        # './datasets/deepmind_mathematics/train.pkl',
     )
     val_datasources: Tuple[str] = (
-        './datasets/dolly/validation.pkl',
         './datasets/alpaca/validation.pkl',
-        './datasets/squad/validation.pkl',
-        './datasets/deepmind_mathematics/validation.pkl',
-        './datasets/commonsense_dialogues/validation.pkl',
+        './datasets/hh_rlhf_finetune/validation.pkl',
+        # './datasets/stack_exchange_finetune/validation.pkl',
+        # './datasets/dolly/validation.pkl',
+        # './datasets/squad/validation.pkl',
+        # './datasets/commonsense_dialogues/validation.pkl',
+        # './datasets/deepmind_mathematics/validation.pkl',
     )
     dataloader_workers: int = 1
 
@@ -45,42 +49,42 @@ class config:
     # accumulate gradients so for each iteration, the actual batch size is = train_batch_size x gradient_accum_steps
     train_batch_size: int = 2
     gradient_accum_steps: int = 16
-    loss_scale: float = 1.0  # scale loss to account for gradient accumulation, we don't want to use a very small scale
-    val_interval: int = 200
+    val_interval: int = 500
     val_batch_size: int = 30
     val_steps: int = 20
     log_interval: int = 5  # log training metrics (loss, accuracy)
-    ckpt_interval: int = 200  # save model checkpoints every N Training steps
+    ckpt_interval: int = 500  # save model checkpoints every N Training steps
 
     # LoRA configuration
-    lora_r: int = 64
+    lora_r: int = 128
     lora_scaling: float = 1.0  # set the LoRA scaling, by default 1.0 no scaling
-    lora_dropout: float = 0.0
+    lora_dropout: float = 0.05
 
     # LoRA trainable layers
     lora_attn_query: bool = True  # train Attention query layer
-    lora_attn_key: bool = False  # train Attention key layer
+    lora_attn_key: bool = True  # train Attention key layer
     lora_attn_value: bool = True  # train Attention value layer
-    lora_attn_proj: bool = False  # train Attention projection layer
-    lora_attn_mlp: bool = False  # train Attention MLP block
-    lora_lm_head: bool = True  # train model output head
+    lora_attn_proj: bool = True  # train Attention projection layer
+    lora_attn_mlp: bool = True  # train Attention MLP block
 
+    # additional trainable layers, note we do not apply LoRA or Quantization to these layers
+    additional_layers: Optional[Tuple[str]] = ('lm_head',)
     train_bias: str = 'none'  # none, lora_only, all
 
     # Quantization
-    quant_4bit: bool = False  # quantize frozen linear layer
-    quant_lora_4bit: bool = False  # quantize LoRA linear layer
-    quant_4bit_double: bool = False  # double quantize
+    quant_4bit: bool = True  # quantize frozen linear layer
+    quant_lora_4bit: bool = True  # quantize LoRA linear layer
+    quant_4bit_double: bool = True  # double quantize
     quant_4bit_type: str = 'nf4'  # only supports 'fp4' or 'nf4'
 
     # learning rate
-    init_lr: float = 5e-5  # initial learning rate
-    max_lr: float = 3e-4  # max learning rate after warm up
-    min_lr: float = 3e-4  # min learning rate after decay
-    warmup_ratio: float = 0.03
+    init_lr: float = 2.5e-6  # initial learning rate
+    max_lr: float = 2.5e-5  # max learning rate after warm up
+    min_lr: float = 2.5e-6  # min learning rate after decay
+    warmup_ratio: float = 0.02
 
     # prompt is less important than completion
-    prompt_loss_weight: float = 0.01
+    prompt_loss_weight: float = 0.0
     completion_loss_weight: float = 1.0
 
     # AdamW optimizer
@@ -89,11 +93,11 @@ class config:
     adam_betas: Tuple = (0.9, 0.95)
     adam_eps: float = 1e-5
     adam_fused: bool = True  # only applicable if not using bitsandbytes optimizer
-    grad_clip: float = 1.0
+    grad_clip: float = 5.0
 
     # dropout regularization
     embed_dropout: float = 0.0
-    attn_dropout: float = 0.1
+    attn_dropout: float = 0.0
 
     gradient_checkpointing: bool = False
     mixed_precision: bool = True  # default to BF16, but if no native GPU support detected, will use FP16.

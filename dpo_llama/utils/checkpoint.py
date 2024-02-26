@@ -6,7 +6,7 @@ import os
 import json
 import torch
 import logging
-from typing import Union
+from typing import Union, Optional, Tuple
 
 from dpo_llama.models.model import Transformer
 from dpo_llama.models.lora import lora_state_dict
@@ -40,13 +40,14 @@ def create_checkpoint(model: Transformer, full_path: str) -> None:
     _save_model_meta(model, os.path.dirname(full_path))
 
 
-def create_lora_checkpoint(model: Transformer, full_path: str, train_bias: bool) -> None:
+def create_lora_checkpoint(model: Transformer, full_path: str, train_bias: bool, additional_layers: Optional[Tuple[str]] = None) -> None:
     _check_file_path(full_path)
 
-    ckpt_state = lora_state_dict(model, train_bias=train_bias)
+    ckpt_state = lora_state_dict(model, train_bias=train_bias, additional_layers=additional_layers)
     torch.save(ckpt_state, full_path)
     logger.info(f'LoRA model checkpoint saved at {full_path!r}')
 
+    # save LoRA configuration params so we can re-create the same model after training, which is required to merge weights
     _save_model_meta(model, os.path.dirname(full_path))
 
 

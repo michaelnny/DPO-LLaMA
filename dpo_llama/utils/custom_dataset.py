@@ -100,18 +100,8 @@ class PreferenceDataset(Dataset):
         for source in data_sources:
             samples = pickle.load(open(source, 'rb'))
             for item in samples:
-                # assert 'chosen_tokens' in item
-                # assert 'rejected_tokens' in item
-                # assert 'chosen_ref_logprobs' in item
-                # assert 'rejected_ref_logprobs' in item
-                # assert 'len_prompt' in item
-                # assert 'len_chosen_completion' in item
-                # assert 'len_rejected_completion' in item
-
                 # exclude those samples with length greater than max sequence length
-                seqlen_chosen = item['len_prompt'] + item['len_chosen_completion']
-                seqlen_rejected = item['len_prompt'] + item['len_rejected_completion']
-                if seqlen_chosen > self.max_seq_len or seqlen_rejected > self.max_seq_len:
+                if len(item['chosen_tokens']) > self.max_seq_len or len(item['rejected_tokens']) > self.max_seq_len:
                     continue
 
                 self.data.append(item)
@@ -123,14 +113,14 @@ class PreferenceDataset(Dataset):
         # track statistics
         stats = {
             'prompt': [],
-            'chosen_completion': [],
-            'rejected_completion': [],
+            'chosen': [],
+            'rejected': [],
         }
 
         for item in self.data:
             stats['prompt'].append(item['len_prompt'])
-            stats['chosen_completion'].append(item['len_chosen_completion'])
-            stats['rejected_completion'].append(item['len_rejected_completion'])
+            stats['chosen'].append(len(item['chosen_tokens']))
+            stats['rejected'].append(len(item['rejected_tokens']))
 
         self.seq_length_stats = {}
         for k, v in stats.items():
@@ -151,8 +141,6 @@ class PreferenceDataset(Dataset):
             'chosen_ref_logprobs': torch.tensor(item['chosen_ref_logprobs'], dtype=torch.float),
             'rejected_ref_logprobs': torch.tensor(item['rejected_ref_logprobs'], dtype=torch.float),
             'len_prompt': item['len_prompt'],
-            'len_chosen_completion': item['len_chosen_completion'],
-            'len_rejected_completion': item['len_rejected_completion'],
         }
 
         return sample

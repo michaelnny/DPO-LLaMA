@@ -94,12 +94,12 @@ def train_step(
     model: Transformer,
     batch: Tuple[torch.Tensor],
     scaler: torch.cuda.amp.GradScaler,
-    loss_scale: float,
+    gradient_accum_steps: int,
     tracker: StatsTracker,
 ) -> None:
     """Run a single training step, where we do a forward + backward passes, but do no update parameters"""
 
-    assert loss_scale > 0
+    assert gradient_accum_steps >= 1
 
     x, y, loss_mask = batch
     x, y, loss_mask = (
@@ -113,7 +113,7 @@ def train_step(
     losses = compute_finetune_loss(output, y, loss_mask)  # [batch_size]
     loss = losses.mean()
     # scale the loss to account for gradient accumulation
-    scaled_loss = loss * loss_scale
+    scaled_loss = loss / gradient_accum_steps
 
     if scaler is not None:  # when using float16
         scaler.scale(scaled_loss).backward()
@@ -230,7 +230,6 @@ def main():
     assert cfg.num_epochs >= 1
     assert cfg.train_batch_size >= 1
     assert cfg.gradient_accum_steps >= 1
-    assert 0 < cfg.loss_scale <= 1
     assert cfg.log_interval >= 1
     assert cfg.val_interval >= 0
     assert cfg.val_steps >= 1
@@ -310,7 +309,6 @@ def main():
         lora_attn_value=cfg.lora_attn_value,
         lora_attn_proj=cfg.lora_attn_proj,
         lora_attn_mlp=cfg.lora_attn_mlp,
-        lora_lm_head=cfg.lora_lm_head,
         # Quantization configurations
         quant_4bit=cfg.quant_4bit,
         quant_lora_4bit=cfg.quant_lora_4bit,
@@ -342,12 +340,14 @@ def main():
         else:
             module = module.to(dtype=compute_dtype)
 
-    mark_only_lora_as_trainable(model, train_bias=cfg.train_bias)
+    mark_only_lora_as_trainable(model, train_bias=cfg.train_bias, additional_layers=cfg.additional_layers)
 
     # This is where the weights quantization happens
     # when we move the model to cuda, the bnb.nn.Params4bit.cuda() method is called,
     # and the weights is quantized using bnb.functional.quantize_4bit
     model = model.to('cuda')
+
+    torch.cuda.empty_cache()
 
     logger.info('Initializing optimizer ...')
     num_trainable, num_frozen = compute_num_trainable_params(model)
@@ -375,7 +375,7 @@ def main():
 
     # --------------- Start Training ---------------
 
-    create_ckpt_func = functools.partial(create_lora_checkpoint, train_bias=cfg.train_bias)
+    create_ckpt_func = functools.partial(create_lora_checkpoint, train_bias=cfg.train_bias, additional_layers=cfg.additional_layers)
 
     torch_profiler = None
     tb_writer = SummaryWriter(os.path.join(cfg.log_dir, cfg.model_type))
@@ -402,7 +402,7 @@ def main():
         val_tracker.reset()
 
         for i, batch in enumerate(train_loader):  # for each batch in current epoch
-            train_step(model, batch, scaler, cfg.loss_scale, train_tracker)
+            train_step(model, batch, scaler, cfg.gradient_accum_steps, train_tracker)
 
             if i % cfg.gradient_accum_steps == 0:
                 grad_norm = update_step(model, optimizer, scheduler, cfg.grad_clip, scaler)

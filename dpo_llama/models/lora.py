@@ -47,7 +47,7 @@ two matrices of a lower rank.
 """
 
 import math
-from typing import Dict
+from typing import Dict, Optional, Tuple
 import logging
 import os
 import warnings
@@ -318,7 +318,7 @@ class LoRALinear4bit(Linear4bit, LoRALayer):
         return result
 
 
-def mark_only_lora_as_trainable(model: nn.Module, train_bias: str = 'none') -> None:
+def mark_only_lora_as_trainable(model: nn.Module, train_bias: str = 'none', additional_layers: Optional[Tuple[str]] = None) -> None:
     """Freeze all modules except LoRA's and depending on 'bias' value unfreezes bias weights.
 
     Args:
@@ -327,6 +327,7 @@ def mark_only_lora_as_trainable(model: nn.Module, train_bias: str = 'none') -> N
             ``"none"``: all bias weights will be frozen,
             ``"lora_only"``: only bias weight for LoRA layers will be unfrozen,
             ``"all"``: all bias weights will be unfrozen.
+        additional_layers: the weights will be unfrozen if a layer matching the keyword in the list.
 
     Raises:
         NotImplementedError: if `bias` not in ['none', 'lora_only', 'all']
@@ -335,9 +336,11 @@ def mark_only_lora_as_trainable(model: nn.Module, train_bias: str = 'none') -> N
     if train_bias not in ['none', 'lora_only', 'all']:
         raise NotImplementedError
 
-    # freeze all layers except LoRA's, or output head layer
+    # freeze all layers except LoRA's, or special layers
     for n, p in model.named_parameters():
-        if 'lora_' in n:
+        if additional_layers is not None and any((l_n in n for l_n in additional_layers)):
+            p.requires_grad = True
+        elif 'lora_' in n:
             p.requires_grad = True
         else:
             p.requires_grad = False
@@ -355,7 +358,7 @@ def mark_only_lora_as_trainable(model: nn.Module, train_bias: str = 'none') -> N
                 m.bias.requires_grad = True
 
 
-def lora_state_dict(model: nn.Module, train_bias: str = 'none') -> Dict[str, torch.Tensor]:
+def lora_state_dict(model: nn.Module, train_bias: str = 'none', additional_layers: Optional[Tuple[str]] = None) -> Dict[str, torch.Tensor]:
     """Return state_dict with weights of LoRA's A and B matrices and with biases depending on the `bias` value.
 
     Args:
@@ -364,6 +367,7 @@ def lora_state_dict(model: nn.Module, train_bias: str = 'none') -> Dict[str, tor
             ``"none"``: state dict will not store bias weights,
             ``"lora_only"``: state dict will store bias weights only from LoRA layers,
             ``"all"``: state dict will store all bias weights.
+        additional_layers: also include weights in the state_dict if a layer matching the keyword in the list.
 
     Returns:
         Weights and biases of LoRA layers
@@ -376,10 +380,10 @@ def lora_state_dict(model: nn.Module, train_bias: str = 'none') -> Dict[str, tor
         raise NotImplementedError
 
     state_dict = model.state_dict()
-    return lora_state_dict_from_full_state_dict(state_dict, train_bias)
+    return lora_state_dict_from_full_state_dict(state_dict, train_bias, additional_layers)
 
 
-def lora_state_dict_from_full_state_dict(state_dict: dict, train_bias: str = 'none') -> Dict[str, torch.Tensor]:
+def lora_state_dict_from_full_state_dict(state_dict: dict, train_bias: str = 'none', additional_layers: Optional[Tuple[str]] = None) -> Dict[str, torch.Tensor]:
     """Return state_dict with weights of LoRA's A and B matrices and with biases depending on the `bias` value.
 
     Args:
@@ -388,6 +392,7 @@ def lora_state_dict_from_full_state_dict(state_dict: dict, train_bias: str = 'no
             ``"none"``: state dict will not store bias weights,
             ``"lora_only"``: state dict will store bias weights only from LoRA layers,
             ``"all"``: state dict will store all bias weights.
+        additional_layers: also include weights in the state_dict if a layer matching the keyword in the list.
 
     Returns:
         Weights and biases of LoRA layers
@@ -400,9 +405,9 @@ def lora_state_dict_from_full_state_dict(state_dict: dict, train_bias: str = 'no
         raise NotImplementedError
 
     if train_bias == 'none':
-        return {k: state_dict[k] for k in state_dict if 'lora_' in k}
+        return {k: state_dict[k] for k in state_dict if 'lora_' in k or (additional_layers is not None and any((l_n in k for l_n in additional_layers)))}
     elif train_bias == 'all':
-        return {k: state_dict[k] for k in state_dict if 'lora_' in k or 'bias' in k}
+        return {k: state_dict[k] for k in state_dict if 'lora_' in k or 'bias' in k or (additional_layers is not None and any((l_n in k for l_n in additional_layers)))}
     elif train_bias == 'lora_only':
         to_return = {}
         for k in state_dict:
@@ -411,5 +416,7 @@ def lora_state_dict_from_full_state_dict(state_dict: dict, train_bias: str = 'no
                 bias_name = k.split('lora_')[0] + 'bias'
                 if bias_name in state_dict:
                     to_return[bias_name] = state_dict[bias_name]
+            elif additional_layers is not None and any((l_n in k for l_n in additional_layers)):
+                to_return[k] = state_dict[k]
 
         return to_return
