@@ -533,7 +533,7 @@ def main():
                     # save best model
                     if val_stats['accuracy'] > best_val_accuracy:
                         best_val_accuracy = val_stats['accuracy']
-                        logger.info(f'New best validation accuracy: {val_stats["accuracy"]:.2f}')
+                        logger.info(f'New best validation accuracy: {val_stats["accuracy"]:.4f}')
                         create_ckpt_func(model=model, full_path=os.path.join(cfg.ckpt_dir, f'lora_{cfg.model_type}-best.pth'))
 
     # final checkpoint after training is finished
