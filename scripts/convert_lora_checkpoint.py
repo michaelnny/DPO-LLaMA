@@ -135,15 +135,15 @@ def merge_lora_checkpoint(
 
 if __name__ == '__main__':
     # supervisor fine-tuned model
-    merge_lora_checkpoint(
-        base_ckpt_path='/home/michael/models/meta_llama2/llama-2-7b/consolidated.pth',
-        lora_ckpt_path='./checkpoints/sft_lora/lora_7B-steps-2200.pth',
-        save_path='./checkpoints/7b-sft/steps-2200-merged.pth',
-    )
+    # merge_lora_checkpoint(
+    #     base_ckpt_path='/home/michael/models/meta_llama2/llama-2-7b/consolidated.pth',
+    #     lora_ckpt_path='./checkpoints/sft_lora/lora_7B-steps-5500.pth',
+    #     save_path='./checkpoints/sft/lora_7B-steps-5500-merged.pth',
+    # )
 
     # DPO trained model
     merge_lora_checkpoint(
-        base_ckpt_path='./checkpoints/7b-sft/steps-2200-merged.pth',
-        lora_ckpt_path='./checkpoints/dpo_lora/lora_7B-steps-1200.pth',
-        save_path='./checkpoints/7b-dpo/steps-1200-merged.pth',
+        base_ckpt_path='./checkpoints/7b-sft/steps-5500-merged.pth',
+        lora_ckpt_path='./checkpoints/dpo_lora/lora_7B-steps-1000.pth',
+        save_path='./checkpoints/dpo/lora_7B-steps-1000-merged.pth',
     )

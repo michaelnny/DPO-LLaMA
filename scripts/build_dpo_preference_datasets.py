@@ -603,7 +603,7 @@ if __name__ == '__main__':
     )
 
     process_hh_rlhf_dataset(
-        src_dir='/home/michael/datasets/hh-rlhf',
+        src_dir='/home/michael/datasets/hh-rlhf/helpful-base',
         output_dir='./datasets/hh_rlhf_preference',
         tokenizer=tokenizer,
         reference_model=reference_model,

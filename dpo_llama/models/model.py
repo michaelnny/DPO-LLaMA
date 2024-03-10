@@ -50,6 +50,8 @@ class ModelArgs:
     # dropout regularization
     embed_dropout: float = 0.0
     attn_dropout: float = 0.0
+    resid_dropout: float = 0.0
+    head_dropout: float = 0.0
 
     # others
     gradient_checkpointing: bool = False
@@ -200,6 +202,7 @@ class FeedForward(nn.Module):
         hidden_dim: int,
         multiple_of: int,
         ffn_dim_multiplier: Optional[float],
+        resid_dropout: Optional[float],
     ):
         super().__init__()
         hidden_dim = int(2 * hidden_dim / 3)
@@ -212,8 +215,12 @@ class FeedForward(nn.Module):
         self.w2 = nn.Linear(hidden_dim, dim, bias=False)
         self.w3 = nn.Linear(dim, hidden_dim, bias=False)
 
+        # regularization
+        self.resid_dropout = nn.Dropout(resid_dropout) if resid_dropout > 0 else nn.Identity()
+
     def forward(self, x):
         output = self.w2(F.silu(self.w1(x)) * self.w3(x))
+        output = self.resid_dropout(output)
         return output
 
 
@@ -229,6 +236,7 @@ class TransformerBlock(nn.Module):
             hidden_dim=4 * args.dim,
             multiple_of=args.multiple_of,
             ffn_dim_multiplier=args.ffn_dim_multiplier,
+            resid_dropout=args.resid_dropout,
         )
         self.layer_id = layer_id
         self.attention_norm = RMSNorm(args.dim, eps=args.norm_eps)
@@ -242,8 +250,8 @@ class TransformerBlock(nn.Module):
         mask: Optional[torch.Tensor],
     ):
         h = x + self.attention.forward(self.attention_norm(x), start_pos, freqs_cis, mask)
-        out = h + self.feed_forward.forward(self.ffn_norm(h))
-        return out
+        output = h + self.feed_forward.forward(self.ffn_norm(h))
+        return output
 
 
 class Transformer(nn.Module):
@@ -254,7 +262,8 @@ class Transformer(nn.Module):
         self.n_layers = params.n_layers
 
         self.token_embeddings = nn.Embedding(params.vocab_size, params.dim)
-        self.embeddings_dropout = nn.Dropout(params.embed_dropout) if params.embed_dropout > 0 else nn.Identity()
+        self.embed_dropout = nn.Dropout(params.embed_dropout) if params.embed_dropout > 0 else nn.Identity()
+        self.head_dropout = nn.Dropout(params.head_dropout) if params.head_dropout > 0 else nn.Identity()
 
         self.layers: Iterable[TransformerBlock] = torch.nn.ModuleList()
         for layer_id in range(params.n_layers):
@@ -277,7 +286,7 @@ class Transformer(nn.Module):
     def forward(self, tokens: torch.Tensor, start_pos: Optional[int] = 0) -> torch.Tensor:
         _bsz, seqlen = tokens.shape
         h = self.token_embeddings(tokens)
-        h = self.embeddings_dropout(h)
+        h = self.embed_dropout(h)
 
         self.freqs_cis = self.freqs_cis.to(h.device)
         freqs_cis = self.freqs_cis[start_pos : start_pos + seqlen]
@@ -300,6 +309,7 @@ class Transformer(nn.Module):
                 h = layer(h, start_pos, freqs_cis, mask)
 
         h = self.post_norm(h)
+        h = self.head_dropout(h)
         output = self.lm_head(h).float()
         return output
 

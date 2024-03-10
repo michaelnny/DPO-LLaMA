@@ -119,6 +119,6 @@ if __name__ == '__main__':
     main(
         # ckpt_path="/home/michael/models/meta_llama2/llama-2-7b-chat/consolidated.pth",  # Meta fine-tuned chat model
         # ckpt_path='./checkpoints/7b-sft/steps-2200-merged.pth',  # fine-tuned model
-        ckpt_path='./checkpoints/7b-dpo/steps-1200-merged.pth',  # DPO trained model
+        ckpt_path='./checkpoints/dpo/lora_7B-steps-1000-merged.pth',  # DPO trained model
         tokenizer_path='/home/michael/models/meta_llama2/tokenizer.model',
     )

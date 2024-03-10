@@ -179,3 +179,23 @@ def get_grad_norm_fsdp(model, rank, world_size, sharding_strategy=ShardingStrate
     if sharding_strategy == ShardingStrategy.NO_SHARD:
         return_norm = return_norm / world_size
     return return_norm**0.5
+
+
+def optimizer_to(optim: torch.optim.Optimizer, device: str):
+    """Move pytorch optimizer to some device
+
+    Code copied from
+    https://discuss.pytorch.org/t/moving-optimizer-from-cpu-to-gpu/96068/3
+    """
+    for param in optim.state.values():
+        # Not sure there are any global tensors in the state dict
+        if isinstance(param, torch.Tensor):
+            param.data = param.data.to(device)
+            if param._grad is not None:
+                param._grad.data = param._grad.data.to(device)
+        elif isinstance(param, dict):
+            for subparam in param.values():
+                if isinstance(subparam, torch.Tensor):
+                    subparam.data = subparam.data.to(device)
+                    if subparam._grad is not None:
+                        subparam._grad.data = subparam._grad.data.to(device)

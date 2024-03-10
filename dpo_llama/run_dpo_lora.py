@@ -37,6 +37,7 @@ from dpo_llama.utils.train_helper import (
     create_optimizer,
     compute_num_trainable_params,
     get_grad_norm_local,
+    optimizer_to,
 )
 from dpo_llama.utils.logger import create_logger, log_statistics
 from dpo_llama.utils.tracker import DPOStatsTracker
@@ -388,6 +389,7 @@ def main():
         lora_attn_value=cfg.lora_attn_value,
         lora_attn_proj=cfg.lora_attn_proj,
         lora_attn_mlp=cfg.lora_attn_mlp,
+        lora_head=cfg.lora_head,
         # Quantization configurations
         quant_4bit=cfg.quant_4bit,
         quant_lora_4bit=cfg.quant_lora_4bit,
@@ -399,6 +401,8 @@ def main():
         max_seq_len=cfg.max_seq_len,
         embed_dropout=cfg.embed_dropout,
         attn_dropout=cfg.attn_dropout,
+        resid_dropout=cfg.resid_dropout,
+        head_dropout=cfg.head_dropout,
         gradient_checkpointing=cfg.gradient_checkpointing,
     )
 
@@ -413,12 +417,9 @@ def main():
 
     # try to convert the model to half precision, otherwise we can't even move the 7B model to a single RTX 3090
     for name, module in model.named_modules():
-        if 'norm' in name:  # for better performance, always use full precision for normalization layers
-            module = module.to(dtype=torch.float32)
-        else:
-            module = module.to(dtype=compute_dtype)
+        module = module.to(dtype=compute_dtype)
 
-    mark_only_lora_as_trainable(model, train_bias=cfg.train_bias, additional_layers=cfg.additional_layers)
+    mark_only_lora_as_trainable(model, train_bias=cfg.train_bias)
 
     # This is where the weights quantization happens
     # when we move the model to cuda, the bnb.nn.Params4bit.cuda() method is called,
@@ -453,12 +454,12 @@ def main():
 
     # --------------- Start Training ---------------
 
-    create_ckpt_func = functools.partial(create_lora_checkpoint, train_bias=cfg.train_bias, additional_layers=cfg.additional_layers)
+    create_ckpt_func = functools.partial(create_lora_checkpoint, train_bias=cfg.train_bias)
 
     torch_profiler = None
     tb_writer = SummaryWriter(os.path.join(cfg.log_dir, cfg.model_type))
     train_pbar = tqdm.tqdm(range(max_train_steps), colour='blue', desc='Training steps')
-    best_val_accuracy = 0.0
+    best_val_loss = np.inf
     train_steps = 0
 
     os.makedirs(cfg.log_dir, exist_ok=True)
@@ -515,6 +516,7 @@ def main():
                 # validation steps
                 if cfg.val_steps > 0 and (cfg.val_interval > 0 and train_steps % cfg.val_interval == 0 or train_steps == max_train_steps):
                     model.eval()
+                    optimizer_to(optimizer, 'cpu')  # move optimizer to cpu so we can use larger batch size for validation
                     run_validation_steps(
                         model=model,
                         loader=val_loader,
@@ -526,14 +528,15 @@ def main():
                         use_ipo_loss=cfg.use_ipo_loss,
                     )
                     model.train()
+                    optimizer_to(optimizer, 'cuda')
 
                     val_stats = val_tracker.get_dict(reset=True)
                     log_statistics(tb_writer, train_steps, val_stats, False)
 
                     # save best model
-                    if val_stats['accuracy'] > best_val_accuracy:
-                        best_val_accuracy = val_stats['accuracy']
-                        logger.info(f'New best validation accuracy: {val_stats["accuracy"]:.4f}')
+                    if val_stats['loss'] < best_val_loss:
+                        best_val_loss = val_stats['loss']
+                        logger.info(f'New best validation loss: {best_val_loss:.4f}')
                         create_ckpt_func(model=model, full_path=os.path.join(cfg.ckpt_dir, f'lora_{cfg.model_type}-best.pth'))
 
     # final checkpoint after training is finished

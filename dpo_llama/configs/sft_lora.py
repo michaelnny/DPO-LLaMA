@@ -22,7 +22,6 @@ class config:
     train_datasources: Tuple[str] = (
         './datasets/alpaca/train.pkl',
         './datasets/hh_rlhf_finetune/train.pkl',  # 160k
-        # './datasets/stack_exchange_finetune/train.pkl',  # 300k
         # './datasets/dolly/train.pkl',
         # './datasets/squad/train.pkl',
         # './datasets/commonsense_dialogues/train.pkl',
@@ -31,7 +30,6 @@ class config:
     val_datasources: Tuple[str] = (
         './datasets/alpaca/validation.pkl',
         './datasets/hh_rlhf_finetune/validation.pkl',
-        # './datasets/stack_exchange_finetune/validation.pkl',
         # './datasets/dolly/validation.pkl',
         # './datasets/squad/validation.pkl',
         # './datasets/commonsense_dialogues/validation.pkl',
@@ -56,32 +54,31 @@ class config:
     ckpt_interval: int = 500  # save model checkpoints every N Training steps
 
     # LoRA configuration
-    lora_r: int = 128
+    lora_r: int = 64
     lora_scaling: float = 1.0  # set the LoRA scaling, by default 1.0 no scaling
-    lora_dropout: float = 0.05
+    lora_dropout: float = 0.0
 
     # LoRA trainable layers
     lora_attn_query: bool = True  # train Attention query layer
-    lora_attn_key: bool = True  # train Attention key layer
+    lora_attn_key: bool = False  # train Attention key layer
     lora_attn_value: bool = True  # train Attention value layer
-    lora_attn_proj: bool = True  # train Attention projection layer
-    lora_attn_mlp: bool = True  # train Attention MLP block
+    lora_attn_proj: bool = False  # train Attention projection layer
+    lora_attn_mlp: bool = False  # train Attention MLP block
+    lora_head: bool = True  # train model output layer
 
-    # additional trainable layers, note we do not apply LoRA or Quantization to these layers
-    additional_layers: Optional[Tuple[str]] = ('lm_head',)
     train_bias: str = 'none'  # none, lora_only, all
 
     # Quantization
-    quant_4bit: bool = True  # quantize frozen linear layer
-    quant_lora_4bit: bool = True  # quantize LoRA linear layer
-    quant_4bit_double: bool = True  # double quantize
+    quant_4bit: bool = False  # quantize frozen linear layer
+    quant_lora_4bit: bool = False  # quantize LoRA linear layer
+    quant_4bit_double: bool = False  # double quantize
     quant_4bit_type: str = 'nf4'  # only supports 'fp4' or 'nf4'
 
     # learning rate
-    init_lr: float = 2.5e-6  # initial learning rate
-    max_lr: float = 2.5e-5  # max learning rate after warm up
-    min_lr: float = 2.5e-6  # min learning rate after decay
-    warmup_ratio: float = 0.02
+    init_lr: float = 1.04e-6  # initial learning rate
+    max_lr: float = 1.04e-5  # max learning rate after warm up
+    min_lr: float = 5e-6  # min learning rate after decay
+    warmup_ratio: float = 0.03
 
     # prompt is less important than completion
     prompt_loss_weight: float = 0.0
@@ -96,8 +93,10 @@ class config:
     grad_clip: float = 5.0
 
     # dropout regularization
-    embed_dropout: float = 0.0
-    attn_dropout: float = 0.0
+    embed_dropout: float = 0.1
+    attn_dropout: float = 0.1
+    resid_dropout: float = 0.1
+    head_dropout: float = 0.1
 
     gradient_checkpointing: bool = False
     mixed_precision: bool = True  # default to BF16, but if no native GPU support detected, will use FP16.

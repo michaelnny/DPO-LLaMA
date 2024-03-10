@@ -598,7 +598,7 @@ if __name__ == '__main__':
     )
 
     process_hh_dataset(
-        src_dir='/home/michael/datasets/hh-rlhf',
+        src_dir='/home/michael/datasets/hh-rlhf/helpful-base',
         output_dir='./datasets/hh_rlhf_finetune',
         tokenizer=tokenizer,
         num_workers=16,

@@ -13,7 +13,7 @@ class config:
 
     # model type definition, the details (number of layers, heads etc.) are defined in model.py
     model_type: str = '7B'  # 7B, 13B, 70B
-    max_seq_len: int = 450
+    max_seq_len: int = 512
 
     pretrain_ckpt_file: str = './checkpoints/7b-sft/steps-5500-merged.pth'  # load fine-tuned checkpoint
     tokenizer_file: str = '/home/michael/models/meta_llama2/tokenizer.model'  # load tokenizer model
@@ -34,7 +34,7 @@ class config:
     gradient_accum_steps: int = 16
     val_interval: int = 500
     val_steps: int = 40
-    val_batch_size: int = 28
+    val_batch_size: int = 30
     log_interval: int = 5  # log training metrics (loss, accuracy)
     ckpt_interval: int = 500  # save model checkpoints every N Training steps
 
@@ -45,9 +45,9 @@ class config:
     dpo_reference_free: bool = False
 
     # LoRA configuration
-    lora_r: int = 128
+    lora_r: int = 64
     lora_scaling: float = 1.0  # set the LoRA scaling, by default 1.0 no scaling
-    lora_dropout: float = 0.05
+    lora_dropout: float = 0.0
 
     # LoRA trainable layers
     lora_attn_query: bool = True  # train Attention query layer
@@ -55,22 +55,21 @@ class config:
     lora_attn_value: bool = True  # train Attention value layer
     lora_attn_proj: bool = False  # train Attention projection layer
     lora_attn_mlp: bool = False  # train Attention MLP block
+    lora_head: bool = True  # train model output layer
 
-    # additional trainable layers, note we do not apply LoRA or Quantization to these layers
-    additional_layers: Optional[Tuple[str]] = None
     train_bias: str = 'none'  # none, lora_only, all
 
     # Quantization
     quant_4bit: bool = True  # quantize frozen linear layer
-    quant_lora_4bit: bool = False  # quantize LoRA linear layer
+    quant_lora_4bit: bool = True  # quantize LoRA linear layer
     quant_4bit_double: bool = True  # double quantize
     quant_4bit_type: str = 'nf4'  # only supports 'fp4' or 'nf4'
 
     # learning rate
-    init_lr: float = 2.5e-5  # initial learning rate
-    max_lr: float = 2.5e-4  # max learning rate after warm up
-    min_lr: float = 2.5e-4  # min learning rate after decay
-    warmup_ratio: float = 0.02
+    init_lr: float = 1.04e-6  # initial learning rate
+    max_lr: float = 1.04e-5  # max learning rate after warm up
+    min_lr: float = 5e-6  # min learning rate after decay
+    warmup_ratio: float = 0.03
 
     # AdamW optimizer
     use_paged_adamw: bool = False
@@ -83,6 +82,8 @@ class config:
     # dropout regularization
     embed_dropout: float = 0.0
     attn_dropout: float = 0.0
+    resid_dropout: float = 0.0
+    head_dropout: float = 0.0
 
     gradient_checkpointing: bool = False
     mixed_precision: bool = True  # default to BF16, but if no native GPU support detected, will use FP16.
